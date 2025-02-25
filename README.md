@@ -43,7 +43,7 @@ Available environment variables:
 - PREF_VC - Video codec to be used when encoding video. Example: PREF_VC=h264
 - PREF_AC - Audio codec to be used when encoding audio. Example: PREF_AC=aac
 - PREF_CT - Multimedia container to be used as final video file if the current one is not support. Example: PREF_CT=mkv
-- BPP     - The number of bits that will be allocated to store one pixel in the final file. The larger this value is, the higher the video quality and the larger the final file size. The final bitrate is calculated from this value.
+- BPP     - The number of bits that will be allocated to store one pixel in the final file. The larger this value is, the higher the video quality and the larger the final file size. The final bitrate is calculated from this value. Default value is 0.3
 
 Note that a leading and trailing spaces are required in the lists above.
 
@@ -64,9 +64,9 @@ Note that a leading and trailing spaces are required in the lists above.
 
 Display information about the actions required:
 
-```sh
+```
 $ tv_encoder info video.mp4
-Container  : mp4 --> mkv       <--- My TV doesn't support mp4 container
+Container  : mp4 --> mkv       <--- My TV does not support mp4 container
 Video frame: 1280x540 --> copy
 Video codec: h264 --> copy
 Audio codec: aac --> copy
@@ -76,13 +76,13 @@ Container  : mkv --> copy
 Video frame: 1280x534 --> copy
 Video codec: h264 --> copy
 Audio codec: ac3 --> copy
-Audio codec: dts --> aac       <--- My TV doesn't support dts codec
+Audio codec: dts --> aac       <--- My TV does not support dts codec
 Audio codec: aac --> copy
 ```
 
 Start recoding the video.mp4 file and save the result to the done directory:
 
-```sh
+```
 $ tv_encoder start video.mp4 done/
 ffmpeg version 7.1-4 Copyright (c) 2000-2024 the FFmpeg developers
   built with gcc 14 (Debian 14.2.0-17)
@@ -94,7 +94,7 @@ video.mkv
 
 Same as the previous example, but instead of executing the ffmpeg command, it will be output to the console with all the parameters:
 
-```sh
+```
 $ tv_encoder dry video.mp4 video_for_tv.mkv
 ffmpeg -i video.mp4 -map 0:v -map 0:a -map 0:s? -c copy -- done/video.mkv
 
@@ -104,6 +104,6 @@ ffmpeg -i other_video.mkv -map 0:v -map 0:a -map 0:s? -c copy -c:a:1 aac -- done
 
 To recode several .avi files at a time and write the result to the done directory, you can use the following command:
 
-```sh
+```
 find . -maxdepth 1 -name "*.avi" -exec tv_encoder start {} done/ \;
 ```
