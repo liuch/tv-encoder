@@ -54,8 +54,8 @@ Note that a leading and trailing spaces are required in the lists above.
 
 ## What the script doesn't do:
 
-- Does not change subtitles
-- Does not change codec parameters
+- Does not modify subtitles
+- Does not modify codec parameters
 - Does not delete or overwrite existing video files
 - Does not recode a stream if the stream's codec is already supported by your device
 - Does not detect the codecs supported by your equipment. You must specify them yourself
