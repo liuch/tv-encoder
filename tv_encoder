@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+
+##
+# Version      : 0.1
+# Date         : 2025
+# Author       : Aleksey Andreev (liuch)
+# Available at : https://github.com/liuch/tv-encoder
+# License      : MIT
+#
+##
+#
+# The script analyzes a video file (video and audio streams) and recodes those streams in it
+# that are not supported by your TV. Other streams are copied to a new container without any changes.
+# If the current container is not supported by the TV, the script changes the container format as well.
+# The ffmpeg package is used for recoding.
+#
+# EXAMPLES
+#
+# - Display information about the actions required:
+#
+#   tv_encoder info video.mp4
+#
+# - Start recoding the video.mp4 file and save the result to the done directory:
+#
+#   tv_encoder start video.mp4 done/
+#
+#   Note that the directory must exist.
+#   If a container format change is required, the file extension will be changed.
+#
+# - Start recoding the video.mp4 file to video_for_tv.mkv:
+#
+#   tv_encoder start video.mp4 video_for_tv.mkv
+#
+#   The extension of the final file name must match the name of the desired container.
+#
+# - Same as the previous example, but instead of executing the ffmpeg command,
+#   it will be output to the console with all the parameters:
+#
+#   tv_encoder dry video.mp4 video_for_tv.mkv
+#
+# - To recode several .avi files at a time and write the result to the done directory,
+#   you can use the following command:
+#
+#   find . -maxdepth 1 -name "*.avi" -exec tv_encoder start {} done/ \;
+##
+
+act="$1"
+sou="$2"
+des="$3"
+
+##
+# Below are the default parameters for Samsung UE49NU7100 TV, may be suitable for other models.
+# If you want to use the script for multiple TVs, it is recommended that you do not edit
+# the parameters bellow, but use environment variables to override the parameters.
+# You can create a script like your_tv_name.sh that runs this script with the passed arguments
+# and suitable parameters in environment variables.
+##
+
+# List of supported containers. A leading and trailing spaces are required.
+supp_containers=" avi mkv "
+
+# List of supported video codecs. A leading and trailing spaces are required.
+supp_video_codecs=" h264 hevc "
+
+# List of supported audio codecs. A leading and trailing spaces are required.
+supp_audio_codecs=" mp3 ac3 aac "
+
+# Maximum horizontal or vertical resolution of the frame in pixels.
+# If this value is exceeded, the frame will be reduced with the same proportions.
+maximum_resolution="9999999"
+
+# Video codec to be used if the current codec is not listed on the supp_video_codecs.
+preferred_vcodec="h264"
+
+# Audio codec to be used if the current codec is not listed on the supp_audio_codecs.
+preferred_acodec="aac"
+
+# Multimedia container to be used if the current container is not listed on the supp_containers.
+# Note that not all multimedia containers support subtitles and multiple audio streams in one file.
+preferred_container="mkv"
+
+# The number of bits that will be allocated to store one pixel in the final file.
+# The larger this value is, the higher the video quality and the larger the final file size.
+# The final bitrate is calculated from this value.
+bits_per_pixel="0.3"
+
+##
+# Default parameters is replaced by environment variables, if any.
+##
+if [ -n "$SUPP_CN" ]; then supp_containers=$SUPP_CN; fi
+if [ -n "$SUPP_VC" ]; then supp_video_codecs=$SUPP_VC; fi
+if [ -n "$SUPP_AC" ]; then supp_audio_codecs=$SUPP_AC; fi
+if [ -n "$MAX_RES" ]; then maximum_resolution=$MAX_RES; fi
+if [ -n "$PREF_VC" ]; then preferred_vcodec=$PREF_VC; fi
+if [ -n "$PREF_AC" ]; then preferred_vcodec=$PREF_AC; fi
+if [ -n "$PREF_CT" ]; then preferred_container=$PREF_CT; fi
+if [ -n "$BPP" ]; then bits_per_pixel=$BPP; fi
+
+usage() {
+	echo "Wrong parameters!"
+	echo "Usage:"
+	echo "  $(basename "$0") info  <sorce_file>"
+	echo "  $(basename "$0") start <sorce_file> <target_dir>|<target_file>"
+	echo "  $(basename "$0") dry   <sorce_file> <target_dir>|<target_file>"
+	exit 1
+}
+
+get_info() {
+	case "$1" in
+		"video")
+			ffprobe -v quiet -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=s=,:p=0 "$2"
+			;;
+		"audio")
+			ffprobe -v quiet -select_streams a -show_entries stream=codec_name -of csv=s=,:p=0 "$2"
+			;;
+		*)
+			echo "unknown"
+			;;
+	esac
+}
+
+file_extension() {
+	echo "${1##*.}"
+}
+
+file_name() {
+	if [ "$2" = "" ]; then
+		basename "$1"
+	else
+		echo "$(basename -s "$(file_extension "$1")" "$1")$2"
+	fi
+}
+
+convert_to() {
+	local res=""
+	if [ "$1" = "video" ]; then
+		res=$(echo "$supp_video_codecs" | grep -c " $2 ")
+	elif [ "$1" = "audio" ]; then
+		res=$(echo "$supp_audio_codecs" | grep -c " $2 ")
+	elif [ "$1" = "resolution" ]; then
+		wres=$2
+		hres=$3
+		if [ "$wres" -lt "$hres" ]; then
+			nres="${maximum_resolution}:-1"
+			res=$wres
+		else
+			nres="-1:${maximum_resolution}"
+			res=$hres
+		fi
+		res=$(test "$res" -gt "$maximum_resolution"; echo $?)
+	elif [ "$1" = "container" ]; then
+		res=$(echo "$supp_containers" | grep -c " $2 ")
+	fi
+	if [ "$res" -gt 0 ]; then
+		echo "copy"
+	else
+		if [ "$1" = "video" ]; then
+			echo "$preferred_vcodec"
+		elif [ "$1" = "audio" ]; then
+			echo "$preferred_acodec"
+		elif [ "$1" = "resolution" ]; then
+			echo "$nres"
+		elif [ "$1" = "container" ]; then
+			echo "$preferred_container"
+		else
+			echo "what???!!!"
+		fi
+	fi
+}
+
+file_exist() {
+	if [ ! -f "$1" ]; then
+		echo "Source file \"$sou\" does not exist!"
+		exit 2
+	fi
+}
+
+display_file_info() {
+	local info ex wi he rs vc ac
+	info=$(get_info "video" "$sou")
+	ex=$(file_extension "$sou")
+	wi=$(echo "$info" | cut -sf2 -d",")
+	he=$(echo "$info" | cut -sf3 -d",")
+	rs=$(printf "%sx%s" "$wi" "$he")
+	vc=$(echo "$info" | cut -sf1 -d",")
+	info=$(get_info "audio" "$sou")
+	ac=$info
+	local ex_to rs_to vc_to ac_to
+	ex_to=$(convert_to "container" "$ex")
+	rs_to=$(convert_to "resolution" "$wi" "$he")
+	vc_to=$(convert_to "video" "$vc")
+	echo "Container  : $ex --> $ex_to"
+	echo "Video frame: $rs --> $rs_to"
+	echo "Video codec: $vc --> $vc_to"
+	local res=0
+	if [ "$ex_to" != "copy" ] || [ "$rs_to" != "copy" ] || [ "$vc_to" != "copy" ]; then
+		res=3
+	fi
+	while IFS= read -r ac; do
+		ac_to=$(convert_to "audio" "$ac")
+		echo "Audio codec: $ac --> $ac_to"
+		if [ "$ac_to" != "copy" ]; then
+			res=3
+		fi
+	done < <(echo "$info")
+	return $res
+}
+
+calculate_bitrate() {
+	echo "$(printf "%s*%s*%s*%s/1000\n" "$bits_per_pixel" "$1" "$2" "$3" | LANG=C bc -l | cut -sf1 -d".")k"
+}
+
+required="ffmpeg ffprobe bc basename cut grep"
+for prg in $required
+do
+	if ! which "$prg" > /dev/null
+	then
+		echo "The script requires '$prg' to work"
+		exit 4
+	fi
+done
+
+if [ $# -lt 2 ]
+then
+	usage
+fi
+
+if [ "$act" = "info" ]
+then
+	if [ $# -ne 2 ]; then usage; fi
+	file_exist "$sou"
+	display_file_info
+	exit $?
+fi
+
+if [ "$act" = "start" ] || [ "$act" = "dry" ]
+then
+	if [ $# -ne 3 ]; then usage; fi
+
+	file_exist "$sou"
+	fname=""
+	fcont=$(convert_to "container" "$(file_extension "$sou")")
+	if [ "$fcont" = "copy" ]; then
+		fname=$(file_name "$sou")
+	else
+		fname=$(file_name "$sou" "$fcont")
+	fi
+	if [ -d "$des" ]; then
+		des="${des%%/}/${fname}"
+	fi
+	if [ -f "$des" ]; then
+		echo "Destination file \"$des\" already exists!"
+		exit 2
+	fi
+
+	params=("-c" "copy")
+	info=$(get_info "video" "$sou")
+	vc_to=$(convert_to "video" "$(echo "$info" | cut -sf1 -d",")")
+	width=$(echo "$info" | cut -sf2 -d",")
+	height=$(echo "$info" | cut -sf3 -d",")
+	f_rate=$(echo "$info" | cut -sf4 -d",")
+	rs_to=$(convert_to "resolution" "$width" "$height")
+	if [ "$vc_to" != "copy" ] || [ "$rs_to" != "copy" ]; then
+		if [ "$vc_to" != "copy" ]; then
+			params+=("-c:v" "$vc_to")
+		else
+			params+=("-c:v" "$preferred_vcodec")
+		fi
+		if [ "$rs_to" != "copy" ]; then
+			params+=("-vf" "scale=$rs_to")
+		fi
+		params+=("-b:v" "$(calculate_bitrate  "$width" "$height" "$f_rate")")
+	fi
+	info=$(get_info "audio" "$sou")
+	ai=0
+	while IFS= read -r ac; do
+		ac_to=$(convert_to "audio" "$ac")
+		if [ "$ac_to" != "copy" ]; then
+			params+=("-c:a:$ai" "$ac_to") 
+		fi
+		((++ai))
+	done < <(echo "$info")
+
+	if [ "$act" = "dry" ]
+	then
+		echo ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params[@]}" -- "$des"
+		exit 0
+	else
+		ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params[@]}" -- "$des"
+		exit $?
+	fi
+fi
+usage
