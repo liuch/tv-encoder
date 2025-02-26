@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ##
-# Version      : 0.1
+# Version      : 0.1.1
 # Date         : 2025
 # Author       : Aleksey Andreev (liuch)
 # Available at : https://github.com/liuch/tv-encoder
@@ -283,7 +283,7 @@ then
 
 	if [ "$act" = "dry" ]
 	then
-		echo ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params[@]}" -- "$des"
+		printf "ffmpeg -i %q -map 0:v -map 0:a -map 0:s? %s -- %q\n" "$sou" "${params[*]}" "$des"
 		exit 0
 	else
 		ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params[@]}" -- "$des"
