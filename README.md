@@ -44,6 +44,7 @@ Available environment variables:
 - PREF_AC - Audio codec to be used when encoding audio. Example: PREF_AC=aac
 - PREF_CT - Multimedia container to be used as final video file if the current one is not support. Example: PREF_CT=mkv
 - BPP     - The number of bits that will be allocated to store one pixel in the final file. The larger this value is, the higher the video quality and the larger the final file size. The final bitrate is calculated from this value. Default value is 0.3
+- PASSES  - Number of passes for video encoding. The following values are available: 1, 2. Default value is 2
 
 Note that a leading and trailing spaces are required in the lists above.
 

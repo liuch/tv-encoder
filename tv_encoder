@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ##
-# Version      : 0.1.1
+# Version      : 0.1.2
 # Date         : 2025
 # Author       : Aleksey Andreev (liuch)
 # Available at : https://github.com/liuch/tv-encoder
@@ -84,6 +84,9 @@ preferred_container="mkv"
 # The final bitrate is calculated from this value.
 bits_per_pixel="0.3"
 
+# Number of passes for video encoding. The following values are available: 1, 2
+passes="2"
+
 ##
 # Default parameters is replaced by environment variables, if any.
 ##
@@ -95,6 +98,7 @@ if [ -n "$PREF_VC" ]; then preferred_vcodec=$PREF_VC; fi
 if [ -n "$PREF_AC" ]; then preferred_vcodec=$PREF_AC; fi
 if [ -n "$PREF_CT" ]; then preferred_container=$PREF_CT; fi
 if [ -n "$BPP" ]; then bits_per_pixel=$BPP; fi
+if [ -n "$PASSES" ]; then passes=$PASSES; fi
 
 usage() {
 	echo "Wrong parameters!"
@@ -207,7 +211,96 @@ display_file_info() {
 }
 
 calculate_bitrate() {
-	echo "$(printf "%s*%s*%s*%s/1000\n" "$bits_per_pixel" "$1" "$2" "$3" | LANG=C bc -l | cut -sf1 -d".")k"
+	echo "$(printf "%s*%s*%s*%s/1000*%s\n" "$bits_per_pixel" "$1" "$2" "$3" "$4" | LANG=C bc -l | cut -sf1 -d".")k"
+}
+
+remove_2pass_log() {
+	rm "$1-0.log" "$1-0.log.mbtree"
+}
+
+encode() {
+	local realpasses=1
+	local logprefix
+	params1=()
+	params2=("-c" "copy")
+	info=$(get_info "video" "$sou")
+	vc_to=$(convert_to "video" "$(echo "$info" | cut -sf1 -d",")")
+	width=$(echo "$info" | cut -sf2 -d",")
+	height=$(echo "$info" | cut -sf3 -d",")
+	f_rate=$(echo "$info" | cut -sf4 -d",")
+	rs_to=$(convert_to "resolution" "$width" "$height")
+	if [ "$vc_to" != "copy" ] || [ "$rs_to" != "copy" ]; then
+		if [ "$vc_to" != "copy" ]; then
+			params1+=("-c:v" "$vc_to")
+			params2+=("-c:v" "$vc_to")
+		else
+			params1+=("-c:v" "$preferred_vcodec")
+			params2+=("-c:v" "$preferred_vcodec")
+		fi
+		if [ "$rs_to" != "copy" ]; then
+			params1+=("-vf" "scale=$rs_to")
+			params2+=("-vf" "scale=$rs_to")
+		fi
+		local br_avr
+		br_avr="$(calculate_bitrate  "$width" "$height" "$f_rate" 1)"
+		params1+=("-b:v" "$br_avr")
+		params2+=("-b:v" "$br_avr")
+		if [ "$passes" != "1" ]; then
+			realpasses=2
+			logprefix="$$.logfile"
+			params1+=("-pass" "1")
+			params1+=("-passlogfile" "$logprefix")
+			params1+=("-f" "rawvideo")
+			params2+=("-pass" "2")
+			params2+=("-passlogfile" "$logprefix")
+		fi
+	fi
+	info=$(get_info "audio" "$sou")
+	ai=0
+	while IFS= read -r ac; do
+		ac_to=$(convert_to "audio" "$ac")
+		if [ "$ac_to" != "copy" ]; then
+			params2+=("-c:a:$ai" "$ac_to")
+		fi
+		((++ai))
+	done < <(echo "$info")
+
+	if [ "$act" = "dry" ]
+	then
+		if [ "$realpasses" = "2" ]; then
+			printf "ffmpeg -i %q -map 0:v %s -y -- /dev/null\n" "$sou" "${params1[*]}"
+		fi
+		printf "ffmpeg -i %q -map 0:v -map 0:a -map 0:s? %s -- %q\n" "$sou" "${params2[*]}" "$des"
+		return 0
+	fi
+
+	if [ "$realpasses" = "2" ]; then
+		echo
+		echo "**************************************************"
+		echo "*                                                *"
+		echo "*                   FIRST PASS                   *"
+		echo "*                                                *"
+		echo "**************************************************"
+		echo
+		if ! ffmpeg -i "$sou" -map 0:v "${params1[@]}" -y -- /dev/null; then
+			local r=$?
+			remove_2pass_log "$logprefix"
+			return $r
+		fi
+		echo
+		echo "**************************************************"
+		echo "*                                                *"
+		echo "*                   SECOND PASS                  *"
+		echo "*                                                *"
+		echo "**************************************************"
+		echo
+	fi
+	ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params2[@]}" -- "$des"
+	local r=$?
+	if [ "$realpasses" = "2" ]; then
+		remove_2pass_log "$logprefix"
+	fi
+	return $r
 }
 
 required="ffmpeg ffprobe bc basename cut grep"
@@ -253,41 +346,7 @@ then
 		exit 2
 	fi
 
-	params=("-c" "copy")
-	info=$(get_info "video" "$sou")
-	vc_to=$(convert_to "video" "$(echo "$info" | cut -sf1 -d",")")
-	width=$(echo "$info" | cut -sf2 -d",")
-	height=$(echo "$info" | cut -sf3 -d",")
-	f_rate=$(echo "$info" | cut -sf4 -d",")
-	rs_to=$(convert_to "resolution" "$width" "$height")
-	if [ "$vc_to" != "copy" ] || [ "$rs_to" != "copy" ]; then
-		if [ "$vc_to" != "copy" ]; then
-			params+=("-c:v" "$vc_to")
-		else
-			params+=("-c:v" "$preferred_vcodec")
-		fi
-		if [ "$rs_to" != "copy" ]; then
-			params+=("-vf" "scale=$rs_to")
-		fi
-		params+=("-b:v" "$(calculate_bitrate  "$width" "$height" "$f_rate")")
-	fi
-	info=$(get_info "audio" "$sou")
-	ai=0
-	while IFS= read -r ac; do
-		ac_to=$(convert_to "audio" "$ac")
-		if [ "$ac_to" != "copy" ]; then
-			params+=("-c:a:$ai" "$ac_to") 
-		fi
-		((++ai))
-	done < <(echo "$info")
-
-	if [ "$act" = "dry" ]
-	then
-		printf "ffmpeg -i %q -map 0:v -map 0:a -map 0:s? %s -- %q\n" "$sou" "${params[*]}" "$des"
-		exit 0
-	else
-		ffmpeg -i "$sou" -map 0:v -map 0:a -map 0:s? "${params[@]}" -- "$des"
-		exit $?
-	fi
+	encode
+	exit $?
 fi
 usage
