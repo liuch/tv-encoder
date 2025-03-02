@@ -48,11 +48,6 @@ Available environment variables:
 
 Note that a leading and trailing spaces are required in the lists above.
 
-
-## TODO
-
-- Implement two-pass encoding
-
 ## What the script doesn't do:
 
 - Does not modify subtitles
